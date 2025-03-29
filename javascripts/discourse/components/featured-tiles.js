@@ -1,114 +1,113 @@
 import Component from "@ember/component";
-import { next } from "@ember/runloop";
-import { service } from "@ember/service";
-import { classNameBindings } from "@ember-decorators/component";
-import { observes } from "@ember-decorators/object";
-import discourseComputed from "discourse/lib/decorators";
+import { ajax } from "discourse/lib/ajax";
+import { withPluginApi } from "discourse/lib/plugin-api";
+import { computed } from "@ember/object";
+import { htmlSafe } from "@ember/template";
 
-const displayCategories = settings.display_categories
-  .split("|")
-  .map((id) => parseInt(id, 10))
-  .filter((id) => id);
-
-const featuredTags = settings.featured_tags.split("|").filter(Boolean);
-
-function shuffle(array) {
-  array = [...array];
-
-  // https://stackoverflow.com/a/12646864
-  for (let i = array.length - 1; i > 0; i--) {
-    const j = Math.floor(Math.random() * (i + 1));
-    [array[i], array[j]] = [array[j], array[i]];
-  }
-
-  return array;
-}
-
-@classNameBindings("isLoading")
-export default class FeaturedTiles extends Component {
-  @service router;
-
-  isLoading = true;
+export default Component.extend({
+  classNames: ["featured-tiles"],
+  featuredTiles: null,
+  loading: true,
+  error: false,
 
   init() {
-    super.init();
-    this.set("isLoading", true);
-    this.loadTopics();
-  }
+    this._super(...arguments);
+    this.set("featuredTiles", []);
+    this.loadFeaturedTiles();
+  },
 
-  @observes("category")
-  categoryChanged() {
-    if (settings.scope_to_category) {
-      this.loadTopics();
-    }
-  }
+  @computed("settings.tiles_count")
+  tilesCount(settingCount) {
+    return settingCount || 6;
+  },
 
-  loadTopics() {
-    const loadParams = { period: settings.top_period };
+  @computed("settings.tiles_style")
+  tilesStyle(style) {
+    return style || "basic";
+  },
 
-    if (featuredTags.length) {
-      loadParams.tags = featuredTags;
-    }
+  @computed("settings.tiles_grid_style")
+  tilesGridStyle(style) {
+    return style || "grid";
+  },
 
-    if (settings.featured_category > 0) {
-      loadParams.category = settings.featured_category;
-    }
+  @computed("settings.tiles_grid_gap")
+  tilesGridGap(gap) {
+    return gap || "1em";
+  },
 
-    if (settings.scope_to_category && this.category) {
-      loadParams.category = this.category.id;
-    }
+  @computed("settings.tiles_grid_columns")
+  tilesGridColumns(columns) {
+    return columns || 3;
+  },
 
-    this.store
-      .findFiltered("topicList", {
-        filter: settings.topic_source,
-        params: loadParams,
+  @computed("settings.tiles_grid_columns_mobile")
+  tilesGridColumnsMobile(columns) {
+    return columns || 1;
+  },
+
+  @computed("settings.tiles_grid_columns_tablet")
+  tilesGridColumnsTablet(columns) {
+    return columns || 2;
+  },
+
+  @computed("settings.tiles_height")
+  tilesHeight(height) {
+    return height || "200px";
+  },
+
+  @computed("settings.tiles_height_mobile")
+  tilesHeightMobile(height) {
+    return height || "200px";
+  },
+
+  @computed("settings.tiles_height_tablet")
+  tilesHeightTablet(height) {
+    return height || "200px";
+  },
+
+  @computed("settings.tiles_grid_columns", "settings.tiles_grid_columns_mobile", "settings.tiles_grid_columns_tablet", "settings.tiles_grid_gap", "settings.tiles_height", "settings.tiles_height_mobile", "settings.tiles_height_tablet")
+  tilesGridStyles(columns, columnsMobile, columnsTablet, gap, height, heightMobile, heightTablet) {
+    return htmlSafe(`
+      --tiles-grid-columns: ${columns};
+      --tiles-grid-columns-mobile: ${columnsMobile};
+      --tiles-grid-columns-tablet: ${columnsTablet};
+      --tiles-grid-gap: ${gap};
+      --tiles-height: ${height};
+      --tiles-height-mobile: ${heightMobile};
+      --tiles-height-tablet: ${heightTablet};
+    `);
+  },
+
+  loadFeaturedTiles() {
+    this.set("loading", true);
+    this.set("error", false);
+
+    ajax(`/featured-tiles/featured.json?count=${this.tilesCount}`)
+      .then((result) => {
+        // Filter out topics from category 20 and topics without images
+        const filteredTopics = result.topics.filter(topic => {
+          // Skip topics from category 20
+          if (topic.category_id === 20) {
+            return false;
+          }
+          
+          // Skip topics without images
+          if (!topic.image_url) {
+            return false;
+          }
+          
+          return true;
+        });
+        
+        this.set("featuredTiles", filteredTopics);
       })
-      .then((list) => {
-        this.set("list", list);
-        next(this, () => this.set("isLoading", false)); // Use `next` for CSS animation
+      .catch((error) => {
+        console.error("Error loading featured tiles:", error);
+        this.set("error", true);
+      })
+      .finally(() => {
+        this.set("loading", false);
       });
-  }
-
-  @discourseComputed("list.topics")
-  filteredTopics(topics) {
-    if (!topics) {
-      return;
-    }
-    if (settings.randomize_topics) {
-      topics = shuffle(topics);
-    }
-    return topics.slice(0, settings.maximum_topic_count);
-  }
-
-  @discourseComputed(
-    "site.mobileView",
-    "category.id",
-    "router.currentRouteName"
-  )
-  shouldDisplay(isMobile, viewingCategoryId, currentRouteName) {
-    if (
-      ![
-        "discovery.latest",
-        "discovery.categories",
-        "discovery.category",
-      ].includes(currentRouteName)
-    ) {
-      return false;
-    }
-
-    if (isMobile && !settings.display_mobile) {
-      return false;
-    }
-    if (settings.display_when_unfiltered && !viewingCategoryId) {
-      return true;
-    }
-
-    if (settings.display_on_categories && viewingCategoryId) {
-      if (displayCategories.length === 0) {
-        return true;
-      }
-      return displayCategories.includes(viewingCategoryId);
-    }
-    return false;
-  }
-}
+  },
+});
